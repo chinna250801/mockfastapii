@@ -73,3 +73,25 @@ def test_admin_ping_admin_ok(client):
     tok = client.post("/auth/login", json={"email": "root@x.com", "password": "password123"}).json()["access_token"]
     r = client.get("/admin/ping", headers={"Authorization": f"Bearer {tok}"})
     assert r.status_code == 200
+
+
+def test_signup_short_password_422(client):
+    r = client.post("/auth/signup", json={"name": "A", "email": "short@x.com", "password": "short"})
+    assert r.status_code == 422
+
+
+def test_signup_bad_role_422(client):
+    r = client.post("/auth/signup", json={"name": "A", "email": "role@x.com", "password": "password123", "role": "teacher"})
+    assert r.status_code == 422
+
+
+def test_admin_ping_no_token_401_or_403(client):
+    r = client.get("/admin/ping")
+    assert r.status_code in (401, 403)
+
+
+def test_signup_trims_and_lowercases_email(client):
+    r = client.post("/auth/signup", json={"name": " Spaced ", "email": "  Mix@X.com ", "password": "password123"})
+    assert r.status_code == 201
+    assert r.json()["email"] == "mix@x.com"
+    assert r.json()["name"] == "Spaced"
