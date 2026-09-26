@@ -3,7 +3,7 @@
 > This file stores ONLY what we have discussed and agreed on.
 > Nothing goes here until you say "confirm / done / next".
 
-## Status: 5 tables confirmed.
+## Status: 8 tables confirmed.
 
 ---
 
@@ -116,12 +116,12 @@ Decisions + reasons:
 
 ---
 
-## 5. `mocks` — CONFIRMED
+## 5. `attempts` — CONFIRMED (renamed from `mocks` 2026-09-24)
 
 PRD: §6.3, §6.4, §6.7 (Student selects Topic + Difficulty + Number of Questions 1–20 + Time limit → mock created → timer → submit/auto-submit → history preserved, re-attempts don't overwrite).
 
 ```sql
-mocks (
+attempts (
   id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   student_id         UUID NOT NULL REFERENCES users(id),
   topic_id           UUID NOT NULL REFERENCES topics(id),
@@ -146,6 +146,63 @@ Decisions + reasons:
 - `status VARCHAR(20) NOT NULL CHECK IN ('in_progress','submitted')`: running timer vs done; manual submit + auto-submit both land in `submitted` (your insight); spelling `submitted` (not `submit`/`submited`).
 - `started_at TIMESTAMPTZ NOT NULL DEFAULT now()` + `submitted_at TIMESTAMPTZ` (NULL until submit): Dashboard Date & Time + progress trend ordering (§6.7); `started_at` IS the birth so no extra `created_at` (avoids 3 timestamps); `submitted_at` is actual click moment, not `started_at + limit` deadline (early submit case); TIMESTAMPTZ spelling, consistent with all tables.
 - SQLAlchemy: `id: UUID(as_uuid=True)`, `started_at: DateTime(timezone=True)`, `submitted_at: DateTime(timezone=True)`, `student_id: ForeignKey("users.id")`, `topic_id: ForeignKey("topics.id")`.
+- Rename 2026-09-24: `mocks` → `attempts` (same columns). Header = one row per attempt; lines live in `attempt_questions`.
+
+---
+
+## 6. `attempt_questions` — CONFIRMED
+
+PRD: §6.4, §6.5, §7 (Mock has N questions 1–20 → one-by-one + palette answered/skipped/marked → skip + return later → time per question → scoring rule: answered-correct-later counts, left-unanswered at submit = wrong; time per Q displayed; AI input).
+
+```sql
+attempt_questions (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  attempt_id           UUID NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
+  question_id          UUID NOT NULL REFERENCES questions(id),
+  selected_option_id   UUID REFERENCES options(id),
+  question_order       INT NOT NULL,
+  is_correct           BOOLEAN NOT NULL DEFAULT FALSE,
+  time_spent_seconds   INT NOT NULL DEFAULT 0 CHECK (time_spent_seconds >= 0),
+  UNIQUE (attempt_id, question_order)
+);
+```
+
+Decisions + reasons:
+- `attempt_id UUID NOT NULL REFERENCES attempts(id) ON DELETE CASCADE`: if attempt deleted, lines must vanish (orphans otherwise) — same CASCADE lesson as `options`.
+- `question_id UUID NOT NULL REFERENCES questions(id)` with NO CASCADE: history §6.7 must survive admin deletes; RESTRICT blocks deleting a question that has attempts.
+- `selected_option_id UUID REFERENCES options(id)`, nullable: NULL = skipped (§6.4 skip + return, §7 unanswered = wrong). No `type` column — `answered` = IS NOT NULL, `skipped` = IS NULL; `marked for review` can overlap answered, so single type breaks. Palette-marked stays frontend-only V1.
+- `question_order INT NOT NULL + UNIQUE(attempt_id, question_order)`: stable Q1..QN palette order (§6.4); without it Postgres returns random order — same lesson as `options.display_order`.
+- `is_correct BOOLEAN NOT NULL DEFAULT FALSE`: denormalized at submit for fast Correct/Total (§6.5) + dashboard without joins; same reason `attempts.score` exists.
+- `time_spent_seconds INT NOT NULL DEFAULT 0 CHECK >=0`: seconds (not minutes) — per-Q is 10–90s granularity (§6.5 display, §6.6 AI input).
+- No `created_at`: row birth = attempt time; keeps table slim.
+- SQLAlchemy: `attempt_id: ForeignKey("attempts.id", ondelete="CASCADE")`, `question_id: ForeignKey("questions.id")`, `selected_option_id: ForeignKey("options.id")`.
+
+---
+
+## 7. `ai_feedback` — CONFIRMED
+
+PRD: §6.5, §6.6 (After every submission: correct topics, wrong topics, time per Q, accuracy → AI; returns strongest areas, weakest areas, how to improve; generated immediately after submission).
+
+```sql
+ai_feedback (
+  id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  attempt_id             UUID NOT NULL UNIQUE REFERENCES attempts(id) ON DELETE CASCADE,
+  user_id                UUID NOT NULL REFERENCES users(id),
+  strongest_area         TEXT,
+  weakest_area           TEXT,
+  improvement_suggestion TEXT,
+  full_feedback_text     TEXT NOT NULL,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+Decisions + reasons:
+- `attempt_id UUID NOT NULL UNIQUE REFERENCES attempts(id) ON DELETE CASCADE`: exactly one feedback per submission (§6.5); UNIQUE blocks duplicates on re-submit/retry; CASCADE — feedback is meaningless without its attempt.
+- `user_id UUID NOT NULL REFERENCES users(id)`: redundant (derivable via `attempts.student_id`) but kept to render result page without a join.
+- AI *inputs* (§6.6: correct/wrong topics, time per Q, accuracy) NOT stored: all derivable from `attempts + attempt_questions`. Only outputs stored.
+- `full_feedback_text TEXT NOT NULL`: raw AI response kept so result page re-displays without re-calling API (cost/latency).
+- `created_at TIMESTAMPTZ DEFAULT now()`: consistent with all tables.
+- SQLAlchemy: `attempt_id: ForeignKey("attempts.id", ondelete="CASCADE")`, `created_at: DateTime(timezone=True)`.
 
 <!-- When a table is confirmed, it will be added below in this format:
 ## 1. users — CONFIRMED on <date>

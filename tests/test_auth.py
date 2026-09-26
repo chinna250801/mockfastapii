@@ -95,3 +95,14 @@ def test_signup_trims_and_lowercases_email(client):
     assert r.status_code == 201
     assert r.json()["email"] == "mix@x.com"
     assert r.json()["name"] == "Spaced"
+
+
+def test_inactive_token_rejected(client, db_session):
+    from app.models.user import User
+    client.post("/auth/signup", json={"name": "A", "email": "i@x.com", "password": "password123"})
+    tok = client.post("/auth/login", json={"email": "i@x.com", "password": "password123"}).json()["access_token"]
+    u = db_session.query(User).filter_by(email="i@x.com").one()
+    u.is_active = False
+    db_session.commit()
+    r = client.get("/me", headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 401
